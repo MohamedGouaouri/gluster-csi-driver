@@ -12,7 +12,7 @@ import (
 	"github.com/golang/glog"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/kubernetes/pkg/util/mount"
+	mount "k8s.io/mount-utils"
 )
 
 // Common allocation units

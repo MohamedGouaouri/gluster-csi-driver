@@ -11,14 +11,17 @@ import (
 	"github.com/kubernetes-csi/csi-lib-utils/protosanitizer"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/kubernetes/pkg/util/mount"
-	"k8s.io/kubernetes/pkg/volume/util"
+
+	// "k8s.io/kubernetes/pkg/util/mount"
+
+	mount "k8s.io/mount-utils"
 )
 
 // NodeServer struct of Glusterfs CSI driver with supported methods of CSI node
 // server spec.
 type NodeServer struct {
 	*GfDriver
+	csi.UnimplementedNodeServer
 }
 
 var glusterMounter = mount.New("")
@@ -154,7 +157,7 @@ func (ns *NodeServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpu
 		return nil, status.Error(codes.NotFound, "volume not mounted")
 	}
 
-	err = util.UnmountPath(req.GetTargetPath(), glusterMounter)
+	err = mount.CleanupMountPoint(req.GetTargetPath(), glusterMounter, false)
 	if err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}

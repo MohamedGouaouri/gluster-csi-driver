@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  annotations:
+    pv.kubernetes.io/provisioned-by: org.gluster.glusterfs
+    volume.kubernetes.io/provisioner-deletion-secret-name: ""
+    volume.kubernetes.io/provisioner-deletion-secret-namespace: ""
+  creationTimestamp: "2025-02-12T19:34:47Z"
+  finalizers:
+  - external-provisioner.volume.kubernetes.io/finalizer
+  - kubernetes.io/pv-protection
+  name: pvc-16989164-c966-4c15-9c6c-f352ba4677c9
+  resourceVersion: "783"
+  uid: ae212404-6d5f-46ef-9cc4-c683a634b80a
+spec:
+  accessModes:
+  - ReadWriteMany
+  capacity:
+    storage: 1Gi
+  claimRef:
+    apiVersion: v1
+    kind: PersistentVolumeClaim
+    name: glusterfs-csi-pv
+    namespace: default
+    resourceVersion: "775"
+    uid: 16989164-c966-4c15-9c6c-f352ba4677c9
+  csi:
+    driver: org.gluster.glusterfs
+    volumeAttributes:
+      glusterbkpservers: ""
+      glusterserver: "172.18.37.240"
+      glustervol: pvc-16989164-c966-4c15-9c6c-f352ba4677c9
+      storage.kubernetes.io/csiProvisionerIdentity: 1739388834745-6070-org.gluster.glusterfs
+    volumeHandle: pvc-16989164-c966-4c15-9c6c-f352ba4677c9
+  persistentVolumeReclaimPolicy: Delete
+  storageClassName: glusterfs-csi
+  volumeMode: Filesystem
+status:
+  lastPhaseTransitionTime: "2025-02-12T19:34:47Z"
+  phase: Bound

@@ -11,6 +11,7 @@ import (
 // identity server spec.
 type IdentityServer struct {
 	*GfDriver
+	csi.UnimplementedIdentityServer
 }
 
 // GetPluginInfo returns metadata of the plugin

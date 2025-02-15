@@ -12,66 +12,68 @@
 
 #-- Create build environment
 
-FROM docker.io/openshift/origin-release:golang-1.11 as build
+FROM golang as build
 
-ENV GOPATH="/go/" \
-    SRCDIR="/go/src/github.com/gluster/gluster-csi-driver/" \
-    SCRIPTSDIR="${SRCDIR}scripts/"
+ENV GOPATH="/go/"
 
-RUN yum install -y \
+ENV SRCDIR="/go/src/github.com/gluster/gluster-csi-driver"
+ENV SCRIPTSDIR="${SRCDIR}/scripts"
+
+RUN apt-get install -y \
+    curl \
     git
 
 # Install go tools
-ARG GO_DEP_VERSION=
 ARG GO_METALINTER_VERSION=latest
-COPY scripts/install-go-tools.sh "${SCRIPTSDIR}"
-RUN mkdir -p /go/bin; ${SCRIPTSDIR}/install-go-tools.sh
+WORKDIR "${SRCDIR}"
+COPY scripts/install-go-tools.sh "${SRCDIR}"
+RUN mkdir -p /go/binary; ${SRCDIR}/install-go-tools.sh
 
 # Vendor dependencies
-COPY Gopkg.lock Gopkg.toml "${SRCDIR}"
-WORKDIR "${SRCDIR}"
-RUN /go/bin/dep ensure -v -vendor-only
+COPY go.mod "${SRCDIR}"
+COPY go.sum "${SRCDIR}"
+RUN go get; go mod tidy
 
 # Copy source directories
 COPY cmd/ "${SRCDIR}/cmd"
 COPY pkg/ "${SRCDIR}/pkg"
 COPY scripts/ "${SCRIPTSDIR}"
 
-#-- Test phase
-
-ARG RUN_TESTS=1
-ARG GO_METALINTER_THREADS=1
-ENV TEST_COVERAGE=stdout \
-    GO_COVER_DIR=/build/
 
 RUN mkdir /build
-RUN [ $RUN_TESTS -eq 0 ] || ${SCRIPTSDIR}/lint-go.sh
-RUN [ $RUN_TESTS -eq 0 ] || ${SCRIPTSDIR}/test-go.sh
 
 #-- Build phase
 
 # Build executable
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags '-extldflags "-static"' -o /build/glusterfs-csi-driver cmd/glusterfs/main.go
 
-# Ensure the binary is statically linked
+# # Ensure the binary is statically linked
 RUN ldd /build/glusterfs-csi-driver | grep -q "not a dynamic executable"
 
-#-- Final container
+# #-- Final container
 
-FROM docker.io/centos:7 as final
+FROM ubuntu as final
 
 # Install dependencies
-ADD http://artifacts.ci.centos.org/gluster/nightly/release-6.repo  /etc/yum.repos.d/glusterfs-nightly.repo
-RUN yum update -y && \
-    yum -y install glusterfs-fuse && \
-    yum clean all -y && \
-    rm -rf /var/cache/yum && \
-    rpm -qa | grep gluster | tee /gluster-rpm-versions.txt
+## Use my release
+# ADD http://artifacts.ci.centos.org/gluster/nightly/release-8.repo  /etc/yum.repos.d/glusterfs-nightly.repo
+RUN apt-get update -y && \
+    apt -y install glusterfs-server
+    # yum clean all -y && \
+    # rm -rf /var/cache/yum && \
+    # rpm -qa | grep gluster | tee /gluster-rpm-versions.txt
 
 # Copy glusterfs-csi-driver from build phase
 COPY --from=build /build /
 
-# The version of the driver (git describe --dirty --always --tags | sed 's/-/./2' | sed 's/-/./2')
+# The version of the driver (gUN CGO_ENABLED=0 GOOS=linux go build -ldflags '-extldflags "-static"' -o /build/glusterfs-csi-driver cmd/glusterfs/main.go
+
+# # Ensure the binary is statically linked
+RUN ldd /build/glusterfs-csi-driver | grep -q "not a dynamic executable"
+
+
+# Install dependencies
+## Use my releasit describe --dirty --always --tags | sed 's/-/./2' | sed 's/-/./2')
 ARG version="(unknown)"
 # Container build time (date -u '+%Y-%m-%dT%H:%M:%S.%NZ')
 ARG builddate="(unknown)"

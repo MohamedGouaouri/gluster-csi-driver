@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 GOPATH=$(go env GOPATH)
 GOBINDIR="${GOPATH}/bin"
@@ -28,7 +28,7 @@ install_gometalinter() {
   fi
 
   echo "Installing gometalinter. Version: ${GMLVER}"
-  curl -L https://raw.githubusercontent.com/alecthomas/gometalinter/master/scripts/install.sh | bash -s -- -b "${GOBINDIR}" "${GMLVER}"
+  curl -L https://raw.githubusercontent.com/alecthomas/gometalinter/master/scripts/install.sh | sh -s -- -b "${GOBINDIR}" "${GMLVER}"
 }
 
 install_dep

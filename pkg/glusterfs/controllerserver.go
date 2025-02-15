@@ -35,6 +35,7 @@ var errVolumeNotFound = errors.New("volume not found")
 // controller server spec.
 type ControllerServer struct {
 	*GfDriver
+	csi.UnimplementedControllerServer
 }
 
 // CsiDrvParam stores csi driver specific request parameters.
@@ -62,14 +63,30 @@ type CsiDrvParam struct {
 type ProvisionerConfig struct {
 	gdVolReq *api.VolCreateReq
 	// csiConf  *CsiDrvParam
+	peers map[string]Peer
 }
 
 func setBrickType(reqConf *ProvisionerConfig, value string) error {
 	if value != brickTypeLoop && value != brickTypeLvm {
 		return errors.New("invalid brick provisioner type")
 	}
-	reqConf.gdVolReq.ProvisionerType = value
+	// reqConf.gdVolReq.ProvisionerType = value
 	return nil
+}
+
+func setPeers(reqConf *ProvisionerConfig, peerString string) {
+	// Parse peers string (comma seperated string)
+	peersIPsSzes := strings.Split(peerString, ",")
+	glog.V(4).Infoln("Peer IP:Sizes", peersIPsSzes)
+	for _, peerIPSize := range peersIPsSzes {
+		splitted := strings.Split(peerIPSize, ":")
+		ip := splitted[0]
+		size, _ := strconv.Atoi(splitted[1])
+		size64 := int64(size)
+		reqConf.peers[ip] = Peer{
+			BrickSize: size64,
+		}
+	}
 }
 
 // ParseCreateVolRequest parse incoming volume create request and fill
@@ -89,6 +106,7 @@ func (cs *ControllerServer) ParseCreateVolRequest(req *csi.CreateVolumeRequest) 
 	reqConf.gdVolReq.Name = req.Name
 	// Brick Provisioner Type
 	reqConf.gdVolReq.ProvisionerType = defaultBrickType
+	reqConf.peers = make(map[string]Peer)
 
 	for k, v := range req.GetParameters() {
 		switch k {
@@ -106,6 +124,17 @@ func (cs *ControllerServer) ParseCreateVolRequest(req *csi.CreateVolumeRequest) 
 			//skip incase of arbiterPath and arbiterType are provided
 		case "brickType":
 			err = setBrickType(&reqConf, v)
+
+		// ==== Mohammed: I added peers parameter here ===
+		// Peers must be specified and it includes at least one peer
+		case "peers":
+			if _, ok := req.Parameters["peers"]; !ok {
+				glog.Error("peers argument must be specified")
+			}
+			var peers string = req.Parameters["peers"]
+
+			setPeers(&reqConf, peers)
+
 		default:
 			glog.Errorf("invalid option specified: %s:%s", k, v)
 		}
@@ -159,7 +188,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	volMetaMap := make(map[string]string)
 	volMetaMap[volumeOwnerAnn] = glusterfsCSIDriverName
 	parseResp.gdVolReq.Metadata = volMetaMap
-	parseResp.gdVolReq.Size = uint64(volSizeBytes)
+	// parseResp.gdVolReq.Size = uint64(volSizeBytes)
 
 	volumeName := parseResp.gdVolReq.Name
 
@@ -179,6 +208,15 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			}
 		} else {
 			// If volume does not exist, provision volume
+
+			// 1) We should call lvm proxies to get the bricks paths
+			CreateLVOnPeers(parseResp)
+			// 2) Select an entry node
+			// 3) Register the other nodes as peers
+			cs.registerPeers(parseResp)
+			// 4) Alter gdVolReq to include bricks from other peers and call doVolumeCreate
+			cs.addSubVols(parseResp)
+
 			err = cs.doVolumeCreate(parseResp.gdVolReq)
 			if err != nil {
 				return nil, err
@@ -194,7 +232,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, status.Errorf(codes.Internal, "failed to start volume: %v", err)
 	}
 
-	glusterServer, bkpServers, err := utils.GetClusterNodes(cs.client)
+	_, bkpServers, err := utils.GetClusterNodes(cs.client)
 	if err != nil {
 		glog.Errorf("failed to get cluster nodes: %v", err)
 		return nil, status.Errorf(codes.Internal, "failed to get cluster nodes: %v", err)
@@ -206,7 +244,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			CapacityBytes: volSizeBytes,
 			VolumeContext: map[string]string{
 				"glustervol":        volumeName,
-				"glusterserver":     glusterServer,
+				"glusterserver":     "172.18.37.240",
 				"glusterbkpservers": strings.Join(bkpServers, ":"),
 			},
 		},
@@ -214,6 +252,51 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	glog.V(4).Infof("CSI volume response: %+v", protosanitizer.StripSecrets(resp))
 	return resp, nil
+}
+
+// TODO: Change it
+func (cs *ControllerServer) registerPeers(cfg *ProvisionerConfig) {
+	peers := cfg.peers
+	glog.V(4).Info("CSI Listing peers...")
+
+	resp, err := cs.client.Peers()
+	if err != nil {
+		// TODO: Handle errors
+		return
+	}
+	glog.V(4).Infof("CSI Listing peers: %+v", resp)
+	for k, v := range peers {
+		// addresses := make([]string, 0)
+		// addresses = append(addresses, peer.PeerIP)
+		// req := api.PeerAddReq{
+		// 	Addresses: addresses,
+		// }
+		cfg.peers[k] = Peer{
+			PeerID:    resp[0].ID,
+			BrickPath: v.BrickPath,
+			BrickSize: v.BrickSize,
+		}
+	}
+
+}
+
+func (cs *ControllerServer) addSubVols(cfg *ProvisionerConfig) {
+	cfg.gdVolReq.Subvols = make([]api.SubvolReq, 0)
+	bricks := make([]api.BrickReq, 0)
+	glog.V(4).Info("Add subvols peers: ", cfg.peers)
+	for _, peer := range cfg.peers {
+		bricks = append(bricks, api.BrickReq{
+			PeerID: peer.PeerID.String(),
+			Path:   peer.BrickPath,
+		})
+	}
+	subvols := make([]api.SubvolReq, 0)
+	subvols = append(subvols, api.SubvolReq{
+		Type:   "Distribute",
+		Bricks: bricks,
+	})
+
+	cfg.gdVolReq.Subvols = subvols
 }
 
 func (cs *ControllerServer) getVolumeSize(req *csi.CreateVolumeRequest) int64 {

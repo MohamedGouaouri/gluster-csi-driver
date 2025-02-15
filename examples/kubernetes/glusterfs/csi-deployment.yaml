@@ -14,6 +14,25 @@
 
 ---
 
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: org.gluster.glusterfs
+spec:
+  attachRequired: true
+  podInfoOnMount: true
+  # fsGroupPolicy: File # added in Kubernetes 1.19, this field is GA as of Kubernetes 1.23
+  # volumeLifecycleModes: # added in Kubernetes 1.16, this field is beta
+  #   - Persistent
+  #   - Ephemeral
+  # tokenRequests: # added in Kubernetes 1.20. See status at https://kubernetes-csi.github.io/docs/token-requests.html#status
+  #   - audience: "gcp"
+  #   - audience: "" # empty string means defaulting to the `--api-audiences` of kube-apiserver
+  #     expirationSeconds: 3600
+  # requiresRepublish: true # added in Kubernetes 1.20. See status at https://kubernetes-csi.github.io/docs/token-requests.html#status
+  # seLinuxMount: true # Added in Kubernetest 1.25.
+---
+
 kind: Service
 apiVersion: v1
 metadata:
@@ -29,12 +48,15 @@ spec:
 
 ---
 kind: StatefulSet
-apiVersion: apps/v1beta1
+apiVersion: apps/v1
 metadata:
   name: csi-attacher-glusterfsplugin
 spec:
   serviceName: "csi-attacher"
   replicas: 1
+  selector:
+    matchLabels:
+      app: csi-attacher-glusterfsplugin
   template:
     metadata:
       labels:
@@ -42,21 +64,52 @@ spec:
     spec:
       serviceAccount: glusterfs-csi
       containers:
+        # - name: csi-attacher
+        #   image: quay.io/k8scsi/csi-attacher:v1.0.1
+        #   args:
+        #     - "--v=5"
+        #     - "--csi-address=$(ADDRESS)"
+        #   env:
+        #     - name: ADDRESS
+        #       value: /var/lib/csi/sockets/pluginproxy/csi.sock
+        #   imagePullPolicy: "IfNotPresent"
+        #   volumeMounts:
+        #     - name: socket-dir
+        #       mountPath: /var/lib/csi/sockets/pluginproxy/
         - name: csi-attacher
-          image: quay.io/k8scsi/csi-attacher:v1.0.1
+          image: registry.k8s.io/sig-storage/csi-attacher:v4.4.0
           args:
             - "--v=5"
             - "--csi-address=$(ADDRESS)"
+            # - "--leader-election"
+            - "--http-endpoint=:8080"
           env:
+            - name: MY_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
             - name: ADDRESS
               value: /var/lib/csi/sockets/pluginproxy/csi.sock
           imagePullPolicy: "IfNotPresent"
           volumeMounts:
             - name: socket-dir
               mountPath: /var/lib/csi/sockets/pluginproxy/
-
+          ports:
+            - containerPort: 8080
+              name: http-endpoint
+              protocol: TCP
+          # livenessProbe:
+          #   failureThreshold: 1
+          #   httpGet:
+          #     path: /healthz/leader-election
+          #     port: http-endpoint
+          #   initialDelaySeconds: 10
+          #   timeoutSeconds: 10
+          #   periodSeconds: 20
         - name: glusterfs
-          image: docker.io/gluster/glusterfs-csi-driver
+          # image: docker.io/gluster/glusterfs-csi-driver
+          image: linuxtitan/glusterfs-csi-driver
+
           args:
             - "--nodeid=$(NODE_ID)"
             - "--v=5"
@@ -72,10 +125,10 @@ spec:
             - name: CSI_ENDPOINT
               value: unix://plugin/csi.sock
             - name: REST_URL
-              value: http://192.168.121.182:24007
+              value: http://172.18.37.240:24007
             - name: REST_SECRET
-              value: b03045b7988258557ecd3e136cd37ba3f928ea0831b3b1b7ed8ae238d36d9071
-          imagePullPolicy: "IfNotPresent"
+              value: 2d57c35f001a5f4f2bd06797868d7ddca863fed26367179f60adeb6c8a1c810c
+          imagePullPolicy: "Always"
           volumeMounts:
             - name: socket-dir
               mountPath: /plugin
@@ -85,7 +138,7 @@ spec:
 
 ---
 kind: DaemonSet
-apiVersion: apps/v1beta2
+apiVersion: apps/v1
 metadata:
   name: csi-nodeplugin-glusterfsplugin
 spec:
@@ -101,7 +154,7 @@ spec:
       hostNetwork: true
       containers:
         - name: csi-node-driver-registrar
-          image: quay.io/k8scsi/csi-node-driver-registrar:v1.0.1
+          image: k8s.gcr.io/sig-storage/csi-node-driver-registrar:v2.5.0
           args:
             - "--v=5"
             - "--csi-address=$(ADDRESS)"
@@ -134,7 +187,8 @@ spec:
             capabilities:
               add: ["SYS_ADMIN"]
             allowPrivilegeEscalation: true
-          image: docker.io/gluster/glusterfs-csi-driver
+          # image: docker.io/gluster/glusterfs-csi-driver
+          image: linuxtitan/glusterfs-csi-driver
           args:
             - "--nodeid=$(NODE_ID)"
             - "--v=5"
@@ -150,10 +204,10 @@ spec:
             - name: CSI_ENDPOINT
               value: unix://plugin/csi.sock
             - name: REST_URL
-              value: http://192.168.121.182:24007
+              value: http://172.18.37.240:24007
             - name: REST_SECRET
-              value: b03045b7988258557ecd3e136cd37ba3f928ea0831b3b1b7ed8ae238d36d9071
-          imagePullPolicy: "IfNotPresent"
+              value: 2d57c35f001a5f4f2bd06797868d7ddca863fed26367179f60adeb6c8a1c810c
+          imagePullPolicy: "Always"
           volumeMounts:
             - name: plugin-dir
               mountPath: /plugin
@@ -190,12 +244,15 @@ spec:
 
 ---
 kind: StatefulSet
-apiVersion: apps/v1beta1
+apiVersion: apps/v1
 metadata:
   name: csi-provisioner-glusterfsplugin
 spec:
   serviceName: "csi-provisioner-glusterfsplugin"
   replicas: 1
+  selector:
+    matchLabels:
+      app: csi-provisioner-glusterfsplugin
   template:
     metadata:
       labels:
@@ -203,44 +260,70 @@ spec:
     spec:
       serviceAccount: glusterfs-csi
       containers:
+        # - name: csi-provisioner
+        #   image: quay.io/k8scsi/csi-provisioner
+        #   args:
+        #     - "--provisioner=org.gluster.glusterfs"
+        #     - "--csi-address=$(ADDRESS)"
+        #   env:
+        #     - name: ADDRESS
+        #       value: /var/lib/csi/sockets/pluginproxy/csi.sock
+        #   volumeMounts:
+        #     - name: socket-dir
+        #       mountPath: /var/lib/csi/sockets/pluginproxy/
+        #   imagePullPolicy: "IfNotPresent"
         - name: csi-provisioner
-          image: quay.io/k8scsi/csi-provisioner:v1.0.1
+          image: linuxtitan/csi-provisioner
           args:
-            - "--provisioner=org.gluster.glusterfs"
             - "--csi-address=$(ADDRESS)"
+            # - "--leader-election"
+            - "--http-endpoint=:8080"
           env:
             - name: ADDRESS
               value: /var/lib/csi/sockets/pluginproxy/csi.sock
+          imagePullPolicy: "Always"
           volumeMounts:
             - name: socket-dir
               mountPath: /var/lib/csi/sockets/pluginproxy/
-          imagePullPolicy: "IfNotPresent"
-        - name: csi-cluster-driver-registrar
-          image: quay.io/k8scsi/csi-cluster-driver-registrar:v1.0.1
-          args:
-            - "--v=5"
-            - "--pod-info-mount-version=\"v1\""
-            - "--csi-address=$(ADDRESS)"
-          env:
-            - name: ADDRESS
-              value: /var/lib/csi/sockets/pluginproxy/csi.sock
-          volumeMounts:
-            - name: socket-dir
-              mountPath: /var/lib/csi/sockets/pluginproxy/
-        - name: csi-snapshotter
-          image: quay.io/k8scsi/csi-snapshotter:v1.0.1
-          args:
-            - "--csi-address=$(ADDRESS)"
-            - "--connection-timeout=15s"
-          env:
-            - name: ADDRESS
-              value: /var/lib/csi/sockets/pluginproxy/csi.sock
-          imagePullPolicy: "IfNotPresent"
-          volumeMounts:
-            - name: socket-dir
-              mountPath: /var/lib/csi/sockets/pluginproxy/
+          ports:
+            - containerPort: 8080
+              name: http-endpoint
+              protocol: TCP
+          # livenessProbe:
+          #   failureThreshold: 1
+          #   httpGet:
+          #     path: /healthz/leader-election
+          #     port: http-endpoint
+          #   initialDelaySeconds: 10
+          #   timeoutSeconds: 10
+          #   periodSeconds: 20
+        # - name: csi-cluster-driver-registrar
+        #   image: quay.io/k8scsi/csi-cluster-driver-registrar:v1.0.1
+        #   args:
+        #     - "--v=5"
+        #     - "--pod-info-mount-version=\"v1\""
+        #     - "--csi-address=$(ADDRESS)"
+        #   env:
+        #     - name: ADDRESS
+        #       value: /var/lib/csi/sockets/pluginproxy/csi.sock
+        #   volumeMounts:
+        #     - name: socket-dir
+        #       mountPath: /var/lib/csi/sockets/pluginproxy/
+        # - name: csi-snapshotter
+        #   image: quay.io/k8scsi/csi-snapshotter
+        #   args:
+        #     - "--csi-address=$(ADDRESS)"
+        #     - "--connection-timeout=15s"
+        #   env:
+        #     - name: ADDRESS
+        #       value: /var/lib/csi/sockets/pluginproxy/csi.sock
+        #   imagePullPolicy: "IfNotPresent"
+        #   volumeMounts:
+        #     - name: socket-dir
+        #       mountPath: /var/lib/csi/sockets/pluginproxy/
         - name: glusterfs
-          image: docker.io/gluster/glusterfs-csi-driver
+          # image: docker.io/gluster/glusterfs-csi-driver
+          image: linuxtitan/glusterfs-csi-driver
           args:
             - "--nodeid=$(NODE_ID)"
             - "--v=5"
@@ -256,10 +339,10 @@ spec:
             - name: CSI_ENDPOINT
               value: unix://plugin/csi.sock
             - name: REST_URL
-              value: http://192.168.121.182:24007
+              value: http://172.18.37.240:24007
             - name: REST_SECRET
-              value: b03045b7988258557ecd3e136cd37ba3f928ea0831b3b1b7ed8ae238d36d9071
-          imagePullPolicy: "IfNotPresent"
+              value: 2d57c35f001a5f4f2bd06797868d7ddca863fed26367179f60adeb6c8a1c810c
+          imagePullPolicy: "Always"
           volumeMounts:
             - name: socket-dir
               mountPath: /plugin
@@ -293,7 +376,10 @@ rules:
     verbs: ["get", "list", "watch"]
   - apiGroups: ["storage.k8s.io"]
     resources: ["volumeattachments"]
-    verbs: ["get", "list", "watch", "update"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["volumeattachments/status"]
+    verbs: ["patch"]
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["list", "watch", "create", "update", "patch", "delete", "get"]
@@ -321,6 +407,9 @@ rules:
   - apiGroups: ["csi.storage.k8s.io"]
     resources: ["csidrivers"]
     verbs: ["create", "delete"]
+
+
+
 
 ---
 kind: ClusterRoleBinding
