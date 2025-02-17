@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gluster/gluster-csi-driver/pkg/glusterfs/pb"
+	"github.com/gluster/glusterd2/pkg/restclient"
 	"github.com/golang/glog"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -15,7 +16,7 @@ const DefaultLVMProxyPort int = 50050
 
 // TODO: To be changed
 // CreateLVOnPeers creates LVM volumes on remote peers using gRPC.
-func CreateLVOnPeers(volRequest *ProvisionerConfig) {
+func CreateVolumesOnPeers(volRequest *ProvisionerConfig) {
 	peers := volRequest.peers
 	glog.V(4).Info("Peers in CreateLVOnPeers: ", peers, len(peers))
 	for k, v := range peers {
@@ -27,8 +28,8 @@ func CreateLVOnPeers(volRequest *ProvisionerConfig) {
 		// Use secure transport credentials instead of deprecated WithInsecure
 		conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
-			glog.V(4).Infof("Failed to connect to %s: %v", addr, err)
-			continue // Skip this peer and try the next one
+			glog.Errorf("Failed to connect to %s: %v", addr, err)
+			continue
 		}
 		defer conn.Close()
 
@@ -60,4 +61,40 @@ func CreateLVOnPeers(volRequest *ProvisionerConfig) {
 		}
 		glog.V(4).Info("Brick path: ", resp.BrickPath)
 	}
+}
+
+func DeleteVolumeFromPeers(glusterVolumeName string, client *restclient.Client) error {
+	volsResp, err := client.Volumes(glusterVolumeName)
+	if err != nil {
+		glog.Errorf("error listing volume while deleting %v", err)
+	}
+	for _, volResp := range volsResp {
+		for _, subVol := range volResp.Subvols {
+			for _, brick := range subVol.Bricks {
+				addr := fmt.Sprintf("%s:%d", brick.PeerID, DefaultLVMProxyPort)
+
+				conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+				if err != nil {
+					glog.Errorf("Failed to connect to %s: %v", addr, err)
+					continue
+				}
+
+				client := pb.NewVolumeClient(conn)
+				req := &pb.DeleteVolumeRequest{
+					VolumeGroup: "vg", // TODO: Move this to configs
+					VolumeName:  glusterVolumeName,
+				}
+
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // Increased timeout
+				defer cancel()
+				_, err = client.DeleteVolume(ctx, req)
+				if err != nil {
+					glog.Errorf("error deleting volume from lvm proxy: %v", err)
+					// TODO: Add error to list of errors
+					continue
+				}
+			}
+		}
+	}
+	return nil
 }

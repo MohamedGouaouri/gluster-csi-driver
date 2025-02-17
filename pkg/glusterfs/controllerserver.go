@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -76,9 +77,9 @@ func setBrickType(reqConf *ProvisionerConfig, value string) error {
 
 func setPeers(reqConf *ProvisionerConfig, peerString string) {
 	// Parse peers string (comma seperated string)
-	peersIPsSzes := strings.Split(peerString, ",")
-	glog.V(4).Infoln("Peer IP:Sizes", peersIPsSzes)
-	for _, peerIPSize := range peersIPsSzes {
+	peersIPsSizes := strings.Split(peerString, ",")
+	glog.V(4).Infoln("Peer IP:Sizes", peersIPsSizes)
+	for _, peerIPSize := range peersIPsSizes {
 		splitted := strings.Split(peerIPSize, ":")
 		ip := splitted[0]
 		size, _ := strconv.Atoi(splitted[1])
@@ -210,7 +211,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			// If volume does not exist, provision volume
 
 			// 1) We should call lvm proxies to get the bricks paths
-			CreateLVOnPeers(parseResp)
+			CreateVolumesOnPeers(parseResp)
 			// 2) Select an entry node
 			// 3) Register the other nodes as peers
 			cs.registerPeers(parseResp)
@@ -232,7 +233,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, status.Errorf(codes.Internal, "failed to start volume: %v", err)
 	}
 
-	_, bkpServers, err := utils.GetClusterNodes(cs.client)
+	glusterServer, bkpServers, err := utils.GetClusterNodes(cs.client)
 	if err != nil {
 		glog.Errorf("failed to get cluster nodes: %v", err)
 		return nil, status.Errorf(codes.Internal, "failed to get cluster nodes: %v", err)
@@ -244,7 +245,7 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 			CapacityBytes: volSizeBytes,
 			VolumeContext: map[string]string{
 				"glustervol":        volumeName,
-				"glusterserver":     "172.18.37.240",
+				"glusterserver":     glusterServer,
 				"glusterbkpservers": strings.Join(bkpServers, ":"),
 			},
 		},
@@ -254,7 +255,6 @@ func (cs *ControllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	return resp, nil
 }
 
-// TODO: Change it
 func (cs *ControllerServer) registerPeers(cfg *ProvisionerConfig) {
 	peers := cfg.peers
 	glog.V(4).Info("CSI Listing peers...")
@@ -265,19 +265,35 @@ func (cs *ControllerServer) registerPeers(cfg *ProvisionerConfig) {
 		return
 	}
 	glog.V(4).Infof("CSI Listing peers: %+v", resp)
-	for k, v := range peers {
-		// addresses := make([]string, 0)
-		// addresses = append(addresses, peer.PeerIP)
-		// req := api.PeerAddReq{
-		// 	Addresses: addresses,
-		// }
-		cfg.peers[k] = Peer{
-			PeerID:    resp[0].ID,
-			BrickPath: v.BrickPath,
-			BrickSize: v.BrickSize,
+	for ip, peer := range peers {
+		// We search for an exiting peer
+		found := false
+		for _, peerResp := range resp {
+			if slices.Contains(peerResp.PeerAddresses, ip) {
+				found = true
+				break
+			}
 		}
-	}
+		if !found {
+			// Register it if not found
+			addresses := make([]string, 0)
+			addresses = append(addresses, ip)
+			addReq := api.PeerAddReq{
+				Addresses: addresses,
+			}
+			addResp, err := cs.client.PeerAdd(addReq)
+			if err != nil {
+				glog.Errorf("Error adding peer: %+v", err)
 
+			}
+			cfg.peers[ip] = Peer{
+				PeerID:    addResp.ID,
+				BrickPath: peer.BrickPath,
+				BrickSize: peer.BrickSize,
+			}
+		}
+
+	}
 }
 
 func (cs *ControllerServer) addSubVols(cfg *ProvisionerConfig) {
@@ -288,11 +304,12 @@ func (cs *ControllerServer) addSubVols(cfg *ProvisionerConfig) {
 		bricks = append(bricks, api.BrickReq{
 			PeerID: peer.PeerID.String(),
 			Path:   peer.BrickPath,
+			Size:   uint64(peer.BrickSize),
 		})
 	}
 	subvols := make([]api.SubvolReq, 0)
 	subvols = append(subvols, api.SubvolReq{
-		Type:   "Distribute",
+		Type:   "Distribute", // TODO: Make the volume type configurable
 		Bricks: bricks,
 	})
 
@@ -463,6 +480,11 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 		return nil, status.Errorf(codes.Internal, "deleting volume %s failed: %v", req.VolumeId, err)
 	}
 
+	err = DeleteVolumeFromPeers(req.VolumeId, cs.client)
+	if err != nil {
+		glog.Errorf("error deleting volume %s", volumeID)
+		return &csi.DeleteVolumeResponse{}, nil
+	}
 	glog.Infof("successfully deleted volume %s", volumeID)
 	return &csi.DeleteVolumeResponse{}, nil
 }
