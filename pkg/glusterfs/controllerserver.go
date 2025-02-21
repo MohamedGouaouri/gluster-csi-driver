@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/gluster/gluster-csi-driver/pkg/utils"
+	"github.com/pborman/uuid"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/gluster/glusterd2/pkg/api"
@@ -268,9 +269,11 @@ func (cs *ControllerServer) registerPeers(cfg *ProvisionerConfig) {
 	for ip, peer := range peers {
 		// We search for an exiting peer
 		found := false
+		var peerID uuid.UUID
 		for _, peerResp := range resp {
-			if slices.Contains(peerResp.PeerAddresses, ip) {
+			if slices.Contains(peerResp.PeerAddresses, fmt.Sprintf("%s:24008", ip)) {
 				found = true
+				peerID = peerResp.ID
 				break
 			}
 		}
@@ -284,10 +287,15 @@ func (cs *ControllerServer) registerPeers(cfg *ProvisionerConfig) {
 			addResp, err := cs.client.PeerAdd(addReq)
 			if err != nil {
 				glog.Errorf("Error adding peer: %+v", err)
-
 			}
 			cfg.peers[ip] = Peer{
 				PeerID:    addResp.ID,
+				BrickPath: peer.BrickPath,
+				BrickSize: peer.BrickSize,
+			}
+		} else {
+			cfg.peers[ip] = Peer{
+				PeerID:    peerID,
 				BrickPath: peer.BrickPath,
 				BrickSize: peer.BrickSize,
 			}

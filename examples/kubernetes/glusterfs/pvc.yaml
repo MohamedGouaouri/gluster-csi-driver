@@ -4,11 +4,11 @@ apiVersion: v1
 metadata:
   name: glusterfs-csi-pv
   annotations:
-    csi.gluster/allocation: "172.18.37.240:1048576"
+    csi.gluster/allocation: "192.168.100.59:1073741824,192.168.100.241:1073741824"
 spec:
   storageClassName: glusterfs-csi
   accessModes:
     - ReadWriteMany
   resources:
     requests:
-      storage: 1Gi
+      storage: 2Gi

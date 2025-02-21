@@ -3,6 +3,7 @@ package glusterfs
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gluster/gluster-csi-driver/pkg/glusterfs/pb"
@@ -20,7 +21,7 @@ func CreateVolumesOnPeers(volRequest *ProvisionerConfig) {
 	peers := volRequest.peers
 	glog.V(4).Info("Peers in CreateLVOnPeers: ", peers, len(peers))
 	for k, v := range peers {
-		glog.V(4).Info("Dialing peer: ", v)
+		glog.V(4).Info("Dialing peer: ", k, v)
 
 		// Fix incorrect formatting of gRPC address
 		addr := fmt.Sprintf("%s:%d", k, DefaultLVMProxyPort)
@@ -51,6 +52,7 @@ func CreateVolumesOnPeers(volRequest *ProvisionerConfig) {
 		}
 
 		// Print the response
+		// TODO: Handle no free space error
 		glog.V(4).Infof("Server Response: %v", resp)
 
 		// Store brick path if successful
@@ -71,7 +73,13 @@ func DeleteVolumeFromPeers(glusterVolumeName string, client *restclient.Client) 
 	for _, volResp := range volsResp {
 		for _, subVol := range volResp.Subvols {
 			for _, brick := range subVol.Bricks {
-				addr := fmt.Sprintf("%s:%d", brick.PeerID, DefaultLVMProxyPort)
+				peerResp, err := client.GetPeer(string(brick.PeerID))
+				if err != nil {
+					glog.Errorf("Failed to get peer %v", err)
+					continue
+
+				}
+				addr := fmt.Sprintf("%s:%d", strings.Split(peerResp.PeerAddresses[0], ":")[0], DefaultLVMProxyPort)
 
 				conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 				if err != nil {

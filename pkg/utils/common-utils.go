@@ -82,19 +82,17 @@ func GetClusterNodes(client *restclient.Client) (string, []string, error) {
 	bkpservers := []string{}
 
 	for i, p := range peers {
-		// TODO: Recheck this
-		// We skip local address
-		if i == 1 {
-			// FIXED: Change p.PeerAddresses to p.ClientAddresses
-			for _, a := range p.ClientAddresses {
+		if i == 0 {
+			for _, a := range p.PeerAddresses {
 				ip := strings.Split(a, ":")
 				glusterServer = ip[0]
+				glusterServer = "192.168.100.59"
+
 			}
 
 			continue
 		}
-		// FIXED: Change p.PeerAddresses to p.ClientAddresses
-		for _, a := range p.ClientAddresses {
+		for _, a := range p.PeerAddresses {
 			ip := strings.Split(a, ":")
 			bkpservers = append(bkpservers, ip[0])
 		}
