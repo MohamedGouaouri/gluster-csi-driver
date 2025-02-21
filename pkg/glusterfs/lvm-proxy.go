@@ -73,13 +73,14 @@ func DeleteVolumeFromPeers(glusterVolumeName string, client *restclient.Client) 
 	for _, volResp := range volsResp {
 		for _, subVol := range volResp.Subvols {
 			for _, brick := range subVol.Bricks {
-				peerResp, err := client.GetPeer(string(brick.PeerID))
+				peerResp, err := client.GetPeer(brick.PeerID.String())
 				if err != nil {
 					glog.Errorf("Failed to get peer %v", err)
 					continue
 
 				}
-				addr := fmt.Sprintf("%s:%d", strings.Split(peerResp.PeerAddresses[0], ":")[0], DefaultLVMProxyPort)
+				peerIP := strings.Split(peerResp.PeerAddresses[0], ":")[0]
+				addr := fmt.Sprintf("%s:%d", peerIP, DefaultLVMProxyPort)
 
 				conn, err := grpc.Dial(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 				if err != nil {
@@ -87,7 +88,7 @@ func DeleteVolumeFromPeers(glusterVolumeName string, client *restclient.Client) 
 					continue
 				}
 
-				client := pb.NewVolumeClient(conn)
+				grpcClient := pb.NewVolumeClient(conn)
 				req := &pb.DeleteVolumeRequest{
 					VolumeGroup: "vg", // TODO: Move this to configs
 					VolumeName:  glusterVolumeName,
@@ -95,12 +96,14 @@ func DeleteVolumeFromPeers(glusterVolumeName string, client *restclient.Client) 
 
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second) // Increased timeout
 				defer cancel()
-				_, err = client.DeleteVolume(ctx, req)
+				resp, err := grpcClient.DeleteVolume(ctx, req)
 				if err != nil {
 					glog.Errorf("error deleting volume from lvm proxy: %v", err)
 					// TODO: Add error to list of errors
 					continue
 				}
+				glog.Errorf("Volume deleted from peer %v, %v", peerIP, resp)
+
 			}
 		}
 	}

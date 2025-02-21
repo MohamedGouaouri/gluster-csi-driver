@@ -477,6 +477,12 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 	}
 
 	// Delete volume
+	err = DeleteVolumeFromPeers(req.VolumeId, cs.client)
+	if err != nil {
+		glog.Errorf("error deleting volume from peers %s", volumeID)
+		// TODO: Handle errors properly
+		// return &csi.DeleteVolumeResponse{}, nil
+	}
 	err = cs.client.VolumeDelete(req.VolumeId)
 	if err != nil {
 		errResp := cs.client.LastErrorResponse()
@@ -488,11 +494,6 @@ func (cs *ControllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 		return nil, status.Errorf(codes.Internal, "deleting volume %s failed: %v", req.VolumeId, err)
 	}
 
-	err = DeleteVolumeFromPeers(req.VolumeId, cs.client)
-	if err != nil {
-		glog.Errorf("error deleting volume %s", volumeID)
-		return &csi.DeleteVolumeResponse{}, nil
-	}
 	glog.Infof("successfully deleted volume %s", volumeID)
 	return &csi.DeleteVolumeResponse{}, nil
 }
